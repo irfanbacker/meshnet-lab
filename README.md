@@ -2,9 +2,14 @@
 
 Emulate mobile ad-hoc mesh networks of hundreds of nodes on a computer. The network is realized using Linux network namespaces that are connected via virtual Ethernet interfaces. The network is defined in a JSON file.
 
-Supported is the emulation of different network characteristics like bandwidth, packet loss, latency and others using [traffic control](https://en.wikipedia.org/wiki/Tc_(Linux)). Node mobility is supported as well. The emulation can run distributed on multiple computers and is lightweight enough to support >200 of nodes on a single desktop computer alone.
+Supported is the emulation of different network characteristics like bandwidth, packet loss, latency and others using [traffic control](https://en.wikipedia.org/wiki/Tc_(Linux)). Node mobility is supported as well. The emulation can run distributed on multiple computers. It is lightweight enough to support >200 of nodes on a single desktop computer alone, and >2000 nodes if the amount of traffic is low (e.g. for reactive routing protocols).
 
-This project is meant to test Mobile AdHoc Mesh routing protocols. Out of the box supported are [Babel](https://www.irif.fr/~jch/software/babel/), [B.A.T.M.A.N.-adv](https://www.open-mesh.org/projects/open-mesh/wiki), [OLSR1](https://github.com/OLSR/olsrd), [OLSR2](https://github.com/OLSR/OONF), [OSPF](https://bird.network.cz/), [BMX6](https://github.com/bmx-routing/bmx6), [BMX7](https://github.com/bmx-routing/bmx7), [Yggdrasil](https://github.com/yggdrasil-network) and [CJDNS](https://github.com/cjdelisle/cjdns). Check out the [test results](results/README.md).
+This project is meant to test Mobile AdHoc Mesh routing protocols. Out of the box supported are [Babel](https://www.irif.fr/~jch/software/babel/), [B.A.T.M.A.N.-adv](https://www.open-mesh.org/projects/open-mesh/wiki), [OLSR1](https://github.com/OLSR/olsrd), [OLSR2](https://github.com/OLSR/OONF), [BMX6](https://github.com/bmx-routing/bmx6), [BMX7](https://github.com/bmx-routing/bmx7), [Yggdrasil](https://github.com/yggdrasil-network) and [CJDNS](https://github.com/cjdelisle/cjdns).
+
+* [routing protocols](protocols/README.md)
+* [test scenarios](tests/README.md)
+* [test data sets](data/README.md)
+* [test results](results/README.md)
 
 Small example:
 ```
@@ -30,11 +35,12 @@ JSON keys:
 
 ## Usage
 
-First you need to have at least one routing protocol available. Batman-adv is already in the Linux kernel, so you only need to install the batctl package. There is a [script](misc/setup.sh) to install all routing protocols.
+First you need to have at least one mesh routing protocol installed. For batman-adv you also need to have the batctl package installed. There is also a [script](misc/setup.sh) to install all routing protocols.
 
 Example run:
 
 ```
+# Need to run as root for local execution
 # Create a 10x10 grid and write it to a file called graph.json
 ./topology.py grid4 10 10 > graph.json
 
@@ -53,20 +59,20 @@ sleep 30
 
 # Run some test commands (output omitted)
 ./ping.py
+./ping.py --path 0 49
 ./traffic.py --duration 3
 ./software.py --verbosity verbose run 'ip a && echo "Hello from inside node"'
 
 # Stop software
 ./software.py stop batman-adv
-Stopped 100 batman-adv instances in 3.109s
 
 # Remove network
 ./network.py apply none
 ```
 
-As an alternative, you can stop all protocols using `./software.py clear` and remove all namespaces using `./network.py clear`. This is useful to cleanup after a tests has been interrupted.
+As an alternative, you can stop all protocols using `./software.py clear` and remove all nodes (= Linux network namespaces) using `./network.py clear`. This is useful to cleanup after a tests has been interrupted.
 
-The `batman-adv` protocol refers to the start/stop scripts in the [protocols](protocols/) subfolder. Add your own scripts to support other protocols.
+The protocol name (e.g. `batman-adv`) refers to the start/stop scripts in the [protocols](protocols/) subfolder. Add your own scripts to support other protocols. The start script is executed once in each virtual node. The stop script is stopping all routing protocol daemons at once for convenience, while this is still a TODO, none of the current tests add/remove nodes during tests yet.
 
 A collections of automated tests with data plot generation is available in the [tests](tests/) subfolder.
 
@@ -144,7 +150,7 @@ Host *
 
 ## Limitations
 
-- no support for multiple connections between two nodes (multigraphs)
+- no support for multiple direct connections between two nodes (multigraphs)
 - only one mesh interface per node/namespace
 - no discrete event simulation that can run faster than real time
 - computer performance might influence results
@@ -167,7 +173,7 @@ All bridges have `ageing_time` and `forward_delay` set to 0 to make them behave 
 ## Routing Protocol Notes
 
 - BATMAN-adv:
-  - needs batctl installed
+  - needs `batctl` installed
   - the current metric limits the maximum hop count to 32 ([source](https://lists.open-mesh.org/pipermail/b.a.t.m.a.n/2020-April/019212.html))
   - `kworker/u32:1+bat_events` quickly becomes a single threaded bottleneck
     - change `create_singlethread_workqueue()` to `create_workqueue()` in `net/batman-adv/main.c` ([source](https://lists.open-mesh.org/pipermail/b.a.t.m.a.n/2020-April/019214.html))
@@ -176,7 +182,7 @@ All bridges have `ageing_time` and `forward_delay` set to 0 to make them behave 
   - tested with batman-adv 2019.4
 - OLSR2 complains when the Linux kernel is not compiled with CONFIG_IPV6_MULTIPLE_TABLES enabled
   - all routes will land in the main table which can interfere with Internet access
-    - this is of no concern for the test setup
+    - this does not affect a network namespace based test setup
   - tested with olsr2 0.15.1
 - OLSR1 has buggy/broken IPv6 support, we use IPv4 instead
   - tested with olsr1 0.9.8
@@ -189,11 +195,11 @@ All bridges have `ageing_time` and `forward_delay` set to 0 to make them behave 
 
 ## Simulation Notes
 
-To lessen the effect of the system on the results when a lot of processes are run, it is advisable to slow down the running speed of the routing protocols (use `cpulimit` or croups) and slow down time as well ([libfaketime](https://github.com/wolfcw/libfaketime)). This has not been tried here yet!
+To lessen the effect of the host system on the results when a lot of processes are run, it is advisable to slow down the running speed of the routing protocols (use `cpulimit` or croups) and slow down time as well ([libfaketime](https://github.com/wolfcw/libfaketime)). This has not been tried here yet!
 
 ## Related Projects
 
-- [Shadow](https://github.com/shadow): intercepts system calls, discrete event simulation
+- [Shadow](https://github.com/shadow): intercepts system calls, discrete event simulation without binary modification
 - [Mininet-WiFi](https://mininet-wifi.github.io/): Looks good. But because of 80211_hwsim probably slow.
 - [CORE](https://github.com/coreemu/core): Common Open Research Emulator (looks good and mature, very similar to this project)
 - [Ad hoc Protocol Evaluation testbed](http://apetestbed.sourceforge.net/) (old and abandened)

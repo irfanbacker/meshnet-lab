@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 
+from cmath import pi
 import random
-import datetime
 import argparse
 import math
 import time
 import sys
 import os
 import re
+import json
 
 import shared
 from shared import (
-    eprint, create_process, exec, get_remote_mapping, millis,
-    default_remotes, convert_to_neighbors, stop_all_terminals,
-    format_size, Remote
+    eprint,
+    create_process,
+    exec,
+    get_remote_mapping,
+    millis,
+    default_remotes,
+    convert_to_neighbors,
+    stop_all_terminals,
+    format_size,
+    Remote,
 )
 
-'''
+"""
 Dijkstra shortest path algorithm
-'''
+"""
+
+
 class Dijkstra:
     def __init__(self, network):
         self.dists_cache = {}
@@ -69,9 +79,10 @@ class Dijkstra:
 
         return path
 
-    '''
+    """
     Calculate shortest path from source to every other node
-    '''
+    """
+
     def _calculate_shortest_paths(self, initial):
         initial = str(initial)
 
@@ -113,29 +124,6 @@ class Dijkstra:
         self.dists_cache[initial] = dists
         self.prevs_cache[initial] = prevs
 
-def _get_clusters_sets(neighbors):
-    visited = {}
-
-    for node in neighbors:
-        visited[node] = False
-
-    def dfs(node, cluster):
-        visited[node] = True
-        cluster.add(node)
-        for neighbor in neighbors[node]:
-            if not visited[neighbor]:
-                dfs(neighbor, cluster)
-
-    clusters = []
-    for node in visited:
-        if not visited[node]:
-            cluster = set()
-            dfs(node, cluster)
-            clusters.append(cluster)
-
-    sorted(clusters, key=lambda cluster: len(cluster))
-    return clusters
-
 def filter_paths(network, paths, min_hops=None, max_hops=None, path_count=None):
     dijkstra = Dijkstra(network)
 
@@ -153,7 +141,9 @@ def filter_paths(network, paths, min_hops=None, max_hops=None, path_count=None):
 
     if path_count is not None:
         if len(filtered) < path_count:
-            eprint(f'Only {len(filtered)} paths left after filtering. Required were at least {path_count}.')
+            eprint(
+                f"Only {len(filtered)} paths left after filtering. Required were at least {path_count}."
+            )
             exit(1)
 
         if len(filtered) > path_count:
@@ -161,39 +151,57 @@ def filter_paths(network, paths, min_hops=None, max_hops=None, path_count=None):
 
     return filtered
 
-'''
-Get list of random unique pairs (no self references, no different directions)
-'''
-def _get_random_paths(nodes, count=10, seed=None):
-    if count > (len(nodes) * (len(nodes) - 1) // 2):
-        eprint(f'Not enough nodes to generate {count} unique paths.')
-        stop_all_terminals()
-        exit(1)
+
+"""
+Get list of random pairs (but no path to self).
+
+If sample_without_replacement=True, then the paths will be
+unique and a single node will only receive one ping at most!
+"""
+def _get_random_paths(nodes, count=10, seed=None, sample_without_replacement=False):
+    if sample_without_replacement:
+        if count > (len(nodes) / 2):
+            eprint(f"Not enough nodes ({len(nodes)}) to generate {count} unique paths.")
+            stop_all_terminals()
+            exit(1)
+    else:
+        if len(nodes) < 2:
+            eprint(f"Not enough nodes ({len(nodes)}) to generate {count} paths.")
+            stop_all_terminals()
+            exit(1)
 
     if seed is not None:
         random.seed(seed)
 
-    def decode(items, i):
-        k = math.floor((1 + math.sqrt(1 + 8 * i)) / 2)
-        return (items[k], items[i - k * (k - 1) // 2])
+    paths = []
+    s = list(range(0, len(nodes)))
+    for i in range(count):
+        a = random.choice(s[:-1])
+        a_index = s.index(a)
+        b = random.choice(s[(a_index + 1):])
+        b_index = s.index(b)
 
-    def rand_pair(n):
-        return decode(random.randrange(n * (n - 1) // 2))
+        if sample_without_replacement:
+            s = s[:a_index] + s[(a_index+1):b_index] + s[(b_index+1):]
 
-    def rand_pairs(items, npairs):
-        n = len(items)
-        return [decode(items, i) for i in random.sample(range(n * (n - 1) // 2), npairs)]
+        if random.uniform(0, 1) > 0.5:
+            paths.append((nodes[a], nodes[b]))
+        else:
+            paths.append((nodes[b], nodes[a]))
 
-    return rand_pairs(nodes, count)
+    return paths
+
 
 # get random node pairs (unique, no self, no reverses)
 def get_random_paths(network=None, count=10, seed=None):
     nodes = list(convert_to_neighbors(network).keys())
     return _get_random_paths(nodes=nodes, count=count, seed=seed)
 
+
 def get_random_nodes(network, count):
     nodes = list(convert_to_neighbors(network).keys())
     return random.sample(nodes, count)
+
 
 # get all paths to neares gateways
 def get_paths_to_gateways(network, gateways):
@@ -221,34 +229,39 @@ def get_paths_to_gateways(network, gateways):
 
     return paths
 
-'''
+
+"""
 Return an IP address of the interface in this preference order:
 1. IPv4 not link local
 2. IPv6 not link local
 3. IPv6 link local
 4. IPv4 link local
-'''
+"""
+
+
 def _get_ip_address(remote, id, interface, address_type=None):
     lladdr6 = None
     lladdr4 = None
     addr6 = None
     addr4 = None
 
-    stdout, stderr, rcode = exec(remote, f'ip netns exec "ns-{id}" ip addr list dev {interface}', get_output=True)
-    lines = stdout.split('\n')
+    stdout, stderr, rcode = exec(
+        remote, f'ip netns exec "ns-{id}" ip addr list dev {interface}', get_output=True
+    )
+    lines = stdout.split("\n")
 
     for line in lines:
-        if 'inet ' in line:
-            addr4 = line.split()[1].split('/')[0]
-            if addr4.startswith('169.254.'):
+        if "inet " in line:
+            addr4 = line.split()[1].split("/")[0]
+            if addr4.startswith("169.254."):
                 lladdr4 = addr4
             else:
                 break
 
     for line in lines:
-        if 'inet6 ' in line:
-            addr6 = line.split()[1].split('/')[0]
-            if addr6.startswith('fe80:'):
+        if "inet6 " in line:
+            addr6 = line.split()[1].split("/")[0]
+            if addr6.startswith("fe80:"):
                 lladdr6 = addr6
             else:
                 break
@@ -265,13 +278,13 @@ def _get_ip_address(remote, id, interface, address_type=None):
         else:
             return lladdr4
 
-    if address_type == '4':
+    if address_type == "4":
         if addr4 is not None:
             return addr4
         else:
             return lladdr4
 
-    if address_type == '6':
+    if address_type == "6":
         if addr6 is not None:
             return addr6
         else:
@@ -279,154 +292,281 @@ def _get_ip_address(remote, id, interface, address_type=None):
 
     return None
 
+
+class _PingStats:
+    send = 0
+    received = 0
+    rtt_avg_ms = 0.0
+
+    def getData(self):
+        titles = ["packets_send", "packets_received", "rtt_avg_ms"]
+        values = [self.send, self.received, self.rtt_avg_ms]
+        return (titles, values)
+
+
 class _PingResult:
+    processed = False
     send = 0
     transmitted = 0
     received = 0
-    rtt_min = 0.0
-    rtt_max = 0.0
-    rtt_avg = 0.0
+    errors = 0
+    packet_loss = 0.0
+    rtt_min = float("nan")
+    rtt_max = float("nan")
+    rtt_avg = float("nan")
 
-    def getData(self):
-        titles = ['packets_send', 'packets_received', 'rtt_avg_ms']
-        values = [self.send, self.received, self.rtt_avg]
-        return (titles, values)
+    def __init__(self, send):
+        self.send = send
 
-_numbers_re = re.compile('[^0-9.]+')
 
-def _parse_ping(output):
-    ret = _PingResult()
-    for line in output.split('\n'):
-        if 'packets transmitted' in line:
+_numbers_re = re.compile("[^0-9.]+")
+
+
+def _parse_ping(result, output):
+    for line in output.split("\n"):
+        if "packets transmitted" in line:
             toks = _numbers_re.split(line)
-            ret.transmitted = int(toks[0])
-            ret.received = int(toks[1])
-        if line.startswith('rtt min/avg/max/mdev'):
-            toks = _numbers_re.split(line)
-            ret.rtt_min = float(toks[1])
-            ret.rtt_avg = float(toks[2])
-            ret.rtt_max = float(toks[3])
-            #ret.rtt_mdev = float(toks[4])
+            result.transmitted = int(toks[0])
+            result.received = int(toks[1])
+            if "errors" in line:
+                result.errors = int(toks[2])
+                result.packet_loss = float(toks[3])
+            else:
+                result.packet_loss = float(toks[2])
 
-    return ret
+        if line.startswith("rtt min/avg/max/mdev"):
+            toks = _numbers_re.split(line)
+            result.rtt_min = float(toks[1])
+            result.rtt_avg = float(toks[2])
+            result.rtt_max = float(toks[3])
+            # result.rtt_mdev = float(toks[4])
+
 
 def _get_interface(remote, source):
-    # some protocols use their own interface as entry point to the mesh
-    for interface in ['tun0', 'bat0']:
-        rcode = exec(remote, f'ip netns exec ns-{source} ip addr list dev {interface}', get_output=True, ignore_error=True)[2]
+    # batman-adv uses bat0 as default entry interface
+    for interface in ["tun0", "bat0"]:
+        rcode = exec(
+            remote,
+            f"ip netns exec ns-{source} ip addr list dev {interface}",
+            get_output=True,
+            ignore_error=True,
+        )[2]
         if rcode == 0:
             return interface
-    return 'uplink'
+    return "uplink"
 
-def ping(paths, duration_ms=1000, remotes=default_remotes, interface=None, verbosity='normal', address_type=None, ping_deadline = 1):
-    ping_count=1
-    processes = []
-    start_ms = millis()
-    started = 0
+
+def ping(
+    paths,
+    duration_ms=1000,
+    remotes=default_remotes,
+    interface=None,
+    verbosity="normal",
+    address_type=None,
+    ping_deadline=1,
+    ping_timeout=None,
+):
+    ping_count = 1
     rmap = get_remote_mapping(remotes)
     path_count = len(paths)
-    while started < path_count:
-        # number of expected tests to have been run
-        started_expected = math.ceil(path_count * ((millis() - start_ms) / duration_ms))
+
+    # prepare ping tasks
+    tasks = []
+    for (source, target) in paths:
+        source_remote = rmap[source]
+        target_remote = rmap[target]
+
+        if interface is None:
+            interface = _get_interface(source_remote, source)
+
+        target_addr = _get_ip_address(target_remote, target, interface, address_type)
+
+        if target_addr is None:
+            eprint(f"Cannot get address of {interface} in ns-{target}")
+        else:
+            debug = f"ping {source:>4} => {target:>4} ({target_addr:<18} / {interface})"
+            command = (
+                f"ip netns exec ns-{source} ping -c {ping_count} "
+                + (f"-w {ping_deadline} " if ping_deadline is not None else "")
+                + (f"-W {ping_timeout} " if ping_timeout is not None else "")
+                + f"-D -I {interface} {target_addr}"
+            )
+            tasks.append((source_remote, command, debug))
+
+    processes = []
+    started = 0
+
+    def process_results():
+        for (process, started_ms, debug, result) in processes:
+            if not result.processed and process.poll() is not None:
+                process.wait()
+                (output, err) = process.communicate()
+                _parse_ping(result, output.decode())
+                result.processed = True
+
+    # keep track of status ouput lines to delete them for updates
+    lines_printed = 0
+
+    def print_processes():
+        nonlocal lines_printed
+
+        # delete previous printed lines
+        for _ in range(lines_printed):
+            sys.stdout.write("\x1b[1A\x1b[2K")
+
+        lines_printed = 0
+        process_counter = 0
+        for (process, started_ms, debug, result) in processes:
+            process_counter += 1
+            status = "???"
+            if result.processed:
+                if result.packet_loss == 0.0:
+                    status = "success"
+                elif result.packet_loss == 100.0:
+                    status = "failed"
+                else:
+                    status = f"mixed ({result.packet_loss:0.2f}% loss)"
+            else:
+                status = "running"
+
+            print(f"[{process_counter:03}:{started_ms:06}] {debug} => {status}")
+            lines_printed += 1
+
+    # start tasks in the given time frame
+    start_ms = millis()
+    last_processed = millis()
+    tasks_count = len(tasks)
+    while started < tasks_count:
+        started_expected = math.ceil(
+            tasks_count * ((millis() - start_ms) / duration_ms)
+        )
         if started_expected > started:
             for _ in range(0, started_expected - started):
-                if len(paths) == 0:
+                if len(tasks) == 0:
                     break
-                (source, target) = paths.pop()
 
-                source_remote = rmap[source]
-                target_remote = rmap[target]
+                (remote, command, debug) = tasks.pop()
+                process = create_process(remote, command)
+                started_ms = millis() - start_ms
+                processes.append((process, started_ms, debug, _PingResult(ping_count)))
 
-                if interface is None:
-                    interface = _get_interface(source_remote, source)
+                # process results and print updates once per second
+                if (last_processed + 1000) < millis():
+                    last_processed = millis()
+                    process_results()
+                    if verbosity != "quiet":
+                        print_processes()
 
-                target_addr = _get_ip_address(target_remote, target, interface, address_type)
-
-                if target_addr is None:
-                    eprint(f'Cannot get address of {interface} in ns-{target}')
-                    # count as started
-                    started += 1
-                else:
-                    debug = '[{:06}] Ping {} => {} ({} / {})'.format(millis() - start_ms, source, target, target_addr, interface)
-                    process = create_process(source_remote, f'ip netns exec ns-{source} ping -c {ping_count} -w {ping_deadline} -D -I {interface} {target_addr}')
-                    processes.append((process, debug))
-                    started += 1
+                started += 1
         else:
             # sleep a small amount
-            time.sleep(duration_ms / path_count / 1000.0 / 10.0)
+            time.sleep(duration_ms / tasks_count / 1000.0 / 10.0)
 
     stop1_ms = millis()
 
-    # wait until duration_ms is over
+    # wait until rest fraction of duration_ms is over
     if (stop1_ms - start_ms) < duration_ms:
         time.sleep((duration_ms - (stop1_ms - start_ms)) / 1000.0)
 
     stop2_ms = millis()
 
-    ret = _PingResult()
+    process_results()
+    if verbosity != "quiet":
+        print_processes()
 
-    # wait/collect for results from pings (prolongs testing up to 1 second!)
-    for (process, debug) in processes:
-        process.wait()
-        (output, err) = process.communicate()
-        result = _parse_ping(output.decode())
-        result.send = ping_count # TODO: nicer
-
+    # collect results
+    rtt_avg_ms_count = 0
+    ret = _PingStats()
+    for (process, started_ms, debug, result) in processes:
         ret.send += result.send
-        ret.transmitted += result.transmitted
-        ret.received += result.received
-        ret.rtt_avg += result.rtt_avg
+        if result.processed:
+            ret.received += int(result.send * (1.0 - (result.packet_loss / 100.0)))
+            # failing ping outputs do not have rtt values
+            if not math.isnan(result.rtt_avg):
+                ret.rtt_avg_ms += result.rtt_avg
+                rtt_avg_ms_count += 1
 
-        if verbosity != 'quiet':
-            if result.send != result.received:
-                print(f'{debug} => failed')
-            else:
-                # success
-                print(f'{debug}')
+    if rtt_avg_ms_count > 0:
+        ret.rtt_avg_ms /= float(rtt_avg_ms_count)
 
-    ret.rtt_avg = 0 if ret.received == 0 else int(ret.rtt_avg / ret.received)
     result_duration_ms = stop1_ms - start_ms
     result_filler_ms = stop2_ms - stop1_ms
 
-    if verbosity != 'quiet':
-        print('send: {}, received: {}, arrived: {}%, measurement span: {}ms'.format(
-            ret.send,
-            ret.received,
-            '-' if (ret.send == 0) else '{:0.2f}'.format(100.0 * (ret.received / ret.send)),
-            result_duration_ms + result_filler_ms
-        ))
+    if verbosity != "quiet":
+        print(
+            "pings send: {}, received: {} ({}), measurement span: {}ms".format(
+                ret.send,
+                ret.received,
+                "-"
+                if (ret.send == 0)
+                else f"{100.0 * (ret.received / ret.send):0.2f}%",
+                result_duration_ms + result_filler_ms,
+            )
+        )
 
     return ret
+
 
 def check_access(remotes):
     shared.check_access(remotes)
 
+
 def namespace_exists(remotes, ns):
     for remote in remotes:
-        rcode = exec(remote, f'ip netns exec ns-{ns} true', get_output=True, ignore_error=True)[2]
+        rcode = exec(
+            remote, f"ip netns exec ns-{ns} true", get_output=True, ignore_error=True
+        )[2]
         if rcode == 0:
             return True
     return False
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Ping various nodes.')
-    parser.add_argument('--remotes', help='Distribute nodes and links on remotes described in the JSON file.')
-    parser.add_argument('--input', help='JSON state of the network.')
-    parser.add_argument('--interface', help='Interface to send data over (autodetected).')
-    parser.add_argument('--min-hops', type=int, help='Minimum hops to ping. Needs --input.')
-    parser.add_argument('--max-hops', type=int, help='Maximum hops to ping. Needs --input.')
-    parser.add_argument('--pings', type=int, default=10, help='Number of pings (unique, no self, no reverse paths).')
-    parser.add_argument('--duration', type=int, default=1000, help='Spread pings over duration in ms.')
-    parser.add_argument('--deadline', type=int, default=1, help='Timeout for ping')
-    parser.add_argument('--path', nargs=2, help='Send pings from a node to another.')
-    parser.add_argument('-4', action='store_true', help='Force use of IPv4 addresses.')
-    parser.add_argument('-6', action='store_true', help='Force use of IPv6 addresses.')
+    parser = argparse.ArgumentParser(description="Ping various nodes.")
+    parser.add_argument(
+        "--remotes",
+        help="Distribute nodes and links on remotes described in the JSON file.",
+    )
+    parser.add_argument("--input", help="JSON state of the network.")
+    parser.add_argument(
+        "--interface", help="Interface to send data over (autodetected)."
+    )
+    parser.add_argument(
+        "--min-hops", type=int, help="Minimum hops to ping. Needs --input."
+    )
+    parser.add_argument(
+        "--max-hops", type=int, help="Maximum hops to ping. Needs --input."
+    )
+    parser.add_argument(
+        "--pings",
+        type=int,
+        default=10,
+        help="Number of pings (unique, no self, no reverse paths).",
+    )
+    parser.add_argument(
+        "--duration", type=int, default=1000, help="Spread pings over duration in ms."
+    )
+    parser.add_argument(
+        "--deadline",
+        type=int,
+        default=1,
+        help="Specify a timeout, in seconds, before ping exits regardless of how many packets have been sent or received. In this case ping does not stop after count packet are sent, it waits either for deadline expire or until count probes are answered or for some error notification from network.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Time to wait for a response, in seconds. The option affects only timeout in absence of any responses, otherwise ping waits for two RTTs.",
+    )
+    parser.add_argument("--path", nargs=2, help="Send pings from a node to another.")
+    parser.add_argument("-4", action="store_true", help="Force use of IPv4 addresses.")
+    parser.add_argument("-6", action="store_true", help="Force use of IPv6 addresses.")
 
     args = parser.parse_args()
 
     if args.remotes:
         if not os.path.isfile(args.remotes):
-            eprint(f'File not found: {args.remotes}')
+            eprint(f"File not found: {args.remotes}")
             stop_all_terminals()
             exit(1)
 
@@ -439,7 +579,7 @@ def main():
     for remote in args.remotes:
         if remote.address is None:
             if os.geteuid() != 0:
-                eprint('Need to run as root.')
+                eprint("Need to run as root.")
                 exit(1)
 
     paths = None
@@ -447,17 +587,19 @@ def main():
     if args.path:
         for ns in args.path:
             if not namespace_exists(args.remotes, ns):
-                eprint(f'Namespace ns-{ns} does not exist')
+                eprint(f"Namespace ns-{ns} does not exist")
                 stop_all_terminals()
                 exit(1)
         paths = [args.path]
     elif args.input:
         state = json.load(args.input)
         paths = get_random_paths(network=state, count=args.pings)
-        paths = filter_paths(state, paths, min_hops=args.min_hops, max_hops=args.max_hops)
+        paths = filter_paths(
+            state, paths, min_hops=args.min_hops, max_hops=args.max_hops
+        )
     else:
         if args.min_hops is not None or args.max_hops is not None:
-            eprint('No min/max hops available without topology information (--input)')
+            eprint("No min/max hops available without topology information (--input)")
             stop_all_terminals()
             exit(1)
 
@@ -466,14 +608,24 @@ def main():
         paths = _get_random_paths(nodes=all, count=args.pings)
 
     address_type = None
-    if getattr(args, '4'):
-        address_type = '4'
-    if getattr(args, '6'):
-        address_type = '6'
+    if getattr(args, "4"):
+        address_type = "4"
+    if getattr(args, "6"):
+        address_type = "6"
 
-    ping(paths=paths, remotes=args.remotes, duration_ms=args.duration, interface=args.interface, verbosity='verbose', address_type=address_type, ping_deadline=args.deadline)
+    ping(
+        paths=paths,
+        remotes=args.remotes,
+        duration_ms=args.duration,
+        interface=args.interface,
+        verbosity="verbose",
+        address_type=address_type,
+        ping_deadline=args.deadline,
+        ping_timeout=args.timeout,
+    )
 
     stop_all_terminals()
+
 
 if __name__ == "__main__":
     main()

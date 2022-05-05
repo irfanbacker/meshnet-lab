@@ -70,6 +70,29 @@ def wait(beg_ms, until_sec):
         stop_all_terminals()
         exit(1)
 
+def _get_clusters_sets(neighbors):
+    visited = {}
+
+    for node in neighbors:
+        visited[node] = False
+
+    def dfs(node, cluster):
+        visited[node] = True
+        cluster.add(node)
+        for neighbor in neighbors[node]:
+            if not visited[neighbor]:
+                dfs(neighbor, cluster)
+
+    clusters = []
+    for node in visited:
+        if not visited[node]:
+            cluster = set()
+            dfs(node, cluster)
+            clusters.append(cluster)
+
+    sorted(clusters, key=lambda cluster: len(cluster))
+    return clusters
+
 '''
 Add links to network to make sure
 it is fully connected.
@@ -201,8 +224,8 @@ class TerminalThread(threading.Thread):
 
                 if p.returncode != 0 and not ignore_error:
                     label = self.remote.address or 'local'
-                    eprint(errout)
                     eprint(stdout)
+                    eprint(errout)
                     eprint(f'Abort, command failed on {label}: {command}')
                     eprint('Network might be in an undefined state!')
                     exit(1)
@@ -325,7 +348,7 @@ def check_access(remotes):
             # we are root
             return
         else:
-            eprint('Local setup needs to run as root.')
+            eprint('Need to run as root for local execution.')
             stop_all_terminals()
             exit(1)
 

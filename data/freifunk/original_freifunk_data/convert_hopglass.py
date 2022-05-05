@@ -7,7 +7,7 @@ import sys
 import os
 
 sys.path.append('../../../')
-import tools
+import shared
 
 
 parser = argparse.ArgumentParser()
@@ -66,6 +66,9 @@ with open(args.input, "r") as file:
 				'target': nodes[lnode['id']]['id']
 			}
 
+			if link['source'] == link['target']:
+				continue
+
 			if 'wifi' in lnode:
 				link['type'] = 'wifi'
 			else:
@@ -83,10 +86,10 @@ with open(args.input, "r") as file:
 network = {'nodes': list(nodes.values()), 'links': list(links.values())}
 
 if args.connected:
-	tools.make_connected(network)
+	shared.make_connected(network)
 
 if args.formatted:
-	json.dump(network, sys.stdout, indent="  ", sort_keys = True)
+	json.dump(network, sys.stdout, indent="  ", sort_keys=True)
 else:
-	json.dump(network, sys.stdout, sort_keys = True)
+	json.dump(network, sys.stdout, sort_keys=True)
 

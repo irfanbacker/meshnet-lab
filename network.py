@@ -17,8 +17,8 @@ from shared import (
     get_current_state, link_id, Remote
 )
 
-block_arp = False
-block_multicast = False
+disable_arp = False
+disable_multicast = False
 verbosity = 'normal'
 mtu = 1500
 
@@ -37,10 +37,10 @@ def configure_interface(remote, nsname, ifname):
     # disable arp / multicast
     # we do not want the OS to send packets on its own,
     # but many mesh protocols need arp/multicast on each link to work
-    if block_arp:
+    if disable_arp:
         exec(remote, f'ip netns exec "{nsname}" ip link set dev "{ifname}" arp off')
 
-    if block_multicast:
+    if disable_multicast:
         exec(remote, f'ip netns exec "{nsname}" ip link set dev "{ifname}" multicast off')
 
 def get_filtered_link(link, direction):
@@ -448,7 +448,7 @@ def _get_remote_mapping(cur_state, new_state, remotes, cur_state_rmap):
 
         return math.sqrt(q / len(partition))
 
-    def partition_to_map(partition, remote):
+    def partition_to_map(partition, remotes):
         node_to_remote_map = {}
         for remote_id, node_ids in partition.items():
             for node_id in node_ids:
@@ -476,6 +476,10 @@ def _get_remote_mapping(cur_state, new_state, remotes, cur_state_rmap):
     tries = 20
     lowest_variance = math.inf
     best_partition = []
+
+    # shortcut: if no mapping on multiple remotes is needed
+    if len(remotes) == 1 and len(cur_state_rmap) == 0:
+        return partition_to_map({0: neighbor_map.keys()}, remotes)
 
     for _ in range(tries):
         partition = partition_into_subgraph_nodes(neighbor_map, list(neighbor_map.keys()), cur_state_rmap, remotes)
@@ -576,9 +580,10 @@ def main():
     parser.add_argument('--verbosity', choices=['verbose', 'normal', 'quiet'], default='normal', help='Set verbosity.')
     parser.add_argument('--link-command', help='Execute a command to change link properties. JSON elements are accessible. E.g. "myscript.sh {ifname} {tq}"')
     parser.add_argument('--node-command', help='Execute a command to change link properties. JSON elements are accessible. E.g. "myscript.sh {ifname} {id}"')
-    parser.add_argument('--block-arp', action='store_true', help='Block ARP packets.')
-    parser.add_argument('--block-multicast', action='store_true', help='Block multicast packets.')
+    parser.add_argument('--disable-arp', action='store_true', help='Disable ARP support on each interface.')
+    parser.add_argument('--disable-multicast', action='store_true', help='Disable Multicast support each interface.')
     parser.add_argument('--remotes', help='Distribute nodes and links on remotes described in the JSON file.')
+    parser.add_argument('--mtu', type=int, default=1500, help='Set Maximum Transfer Unit (MTU) on each interface.')
 
     subparsers = parser.add_subparsers(dest='action', required=True)
 
@@ -589,9 +594,15 @@ def main():
 
     args = parser.parse_args()
 
-    block_arp = args.block_arp
-    block_multicast = args.block_multicast
+    global disable_arp
+    global disable_multicast
+    global verbosity
+    global mtu
+
+    disable_arp = args.disable_arp
+    disable_multicast = args.disable_multicast
     verbosity = args.verbosity
+    mtu = args.mtu
 
     if args.remotes:
         if not os.path.isfile(args.remotes):
